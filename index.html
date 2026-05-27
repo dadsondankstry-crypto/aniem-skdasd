@@ -2,6 +2,7 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
+    <meta name="referrer" content="no-referrer">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ANIME KSM2</title>
     <style>
@@ -4977,6 +4978,290 @@ if (typeof EngineHub !== 'undefined' && EngineHub.montarCardUI && !EngineHub.__s
         if (lista.length <= 1) return;
         qcPlayerFornecedorEscolhido = null;
         afMostrarModalCRONOS(lista, (idx, ordenada) => {
+            const p = (ordenada && ordenada[idx]) || lista[idx] || lista[0];
+            qcAbrirPlayerResolvido(p, qcPlayerAtualResolvido.titulo, qcPlayerAtualResolvido.url, qcPlayerAtualResolvido.img, qcPlayerAtualResolvido.engine);
+        });
+    };
+})();
+
+
+
+/* =========================================================
+   CORREÇÃO ANIMEFIRE / LIGHT SPEED — GITHUB / VERCEL
+   - Mantém o Worker antigo do usuário para detectar players.
+   - AnimeFire/Light Speed abre o MP4 direto primeiro.
+   - Proxy fica só como reserva automática, não como primeira opção.
+   - Remove crossorigin e mensagem forçada que deixava o player pior.
+   - Garante meta referrer no-referrer para não enviar github.io ao vídeo.
+   ========================================================= */
+(function(){
+    if (window.__CRONOS_ANIMEFIRE_LIGHTSPEED_CORRIGIDO__) return;
+    window.__CRONOS_ANIMEFIRE_LIGHTSPEED_CORRIGIDO__ = true;
+
+    try {
+        if (!document.querySelector('meta[name="referrer"]')) {
+            const m = document.createElement('meta');
+            m.setAttribute('name', 'referrer');
+            m.setAttribute('content', 'no-referrer');
+            document.head.appendChild(m);
+        }
+    } catch(e) {}
+
+    const AF_PROXY_FIX = (typeof PROXY_ANIMEFIRE !== 'undefined' && PROXY_ANIMEFIRE)
+        ? String(PROXY_ANIMEFIRE)
+        : 'https://delicate-sea-41ab.getapi-oi.workers.dev/?url=';
+
+    function afBaseFix(proxy) {
+        return String(proxy || '').replace(/\?url=$/, '').replace(/\/$/, '');
+    }
+
+    function afEscFix(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function afNormFix(s) {
+        return String(s || '')
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+    }
+
+    function afSlugFix(s) {
+        return afNormFix(s).replace(/\s+/g, '-') || 'player';
+    }
+
+    function afIsAnimeFireFix(url, engId) {
+        return engId === 'af' || /animefire\.io/i.test(String(url || ''));
+    }
+
+    function afIsLightFix(p) {
+        const s = afNormFix([
+            p && p.nome,
+            p && p.provedorId,
+            p && p.id,
+            p && p.origem,
+            p && p.label,
+            p && p.src,
+            p && p.srcDireto,
+            p && p.srcProxy,
+            p && p.url,
+            p && p.embed,
+            p && p.embedCode
+        ].filter(Boolean).join(' '));
+        return /light speed|lightspeed|lightspeedst|animefire mp4|animefire 360|animefire 480|animefire 720|animefire 1080|\.mp4/.test(s);
+    }
+
+    function afQualFix(p) {
+        const s = afNormFix([
+            p && p.label,
+            p && p.qualidade,
+            p && p.quality,
+            p && p.nome,
+            p && p.src,
+            p && p.srcDireto,
+            p && p.srcProxy,
+            p && p.url,
+            p && p.embed,
+            p && p.embedCode
+        ].filter(Boolean).join(' '));
+        if (/1080|full hd|fullhd|fhd/.test(s)) return 'FHD';
+        if (/720|\bhd\b/.test(s)) return '720p';
+        if (/480/.test(s)) return '480p';
+        if (/360|\bsd\b/.test(s)) return '360p';
+        return '';
+    }
+
+    function afUrlFromProxyFix(u) {
+        try {
+            const x = new URL(String(u || ''));
+            return x.searchParams.get('url') || x.searchParams.get('u') || x.searchParams.get('target') || '';
+        } catch(e) { return ''; }
+    }
+
+    function afExtractSrcFix(html) {
+        const s = String(html || '');
+        const m = s.match(/<video\b[^>]*\bsrc=["']([^"']+)["']/i)
+            || s.match(/<source\b[^>]*\bsrc=["']([^"']+)["']/i)
+            || s.match(/\bdata-alt=["']([^"']+)["']/i)
+            || s.match(/\bsrc=["']([^"']+lightspeedst[^"']+)["']/i);
+        return m ? m[1].replace(/&amp;/g, '&') : '';
+    }
+
+    function afDiretoFix(p) {
+        const direto = p && (p.srcDireto || p.src || p.url || afUrlFromProxyFix(p.srcProxy) || afExtractSrcFix(p.embed || p.embedCode || p.html));
+        return String(direto || '').replace(/&amp;/g, '&').replace(/&#038;/g, '&');
+    }
+
+    function afProxyFix(url) {
+        if (!url) return '';
+        if (/^https?:\/\//i.test(String(url)) && String(url).includes('?url=')) return String(url);
+        return AF_PROXY_FIX + encodeURIComponent(url);
+    }
+
+    function afEmbedFix(p, contextoAnimeFire) {
+        const html = p && (p.embed || p.embedCode || p.html || '');
+        const direto = afDiretoFix(p);
+        const isLight = afIsLightFix(p) || /\.mp4(\?|#|$)|lightspeedst/i.test(direto);
+
+        if (!contextoAnimeFire && !isLight && html && String(html).trim()) return html;
+        if (!isLight && html && String(html).trim() && !direto) return html;
+
+        const proxy = (p && p.srcProxy) || afProxyFix(direto);
+        if (/\.m3u8(\?|#|$)/i.test(direto)) {
+            const id = 'hls_af_fix_' + Math.random().toString(36).slice(2);
+            return `<video id="${id}" class="cronos-video" controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video><script>(function(){var v=document.getElementById('${id}');var src='${afEscFix(direto)}';function play(){if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=src;v.play&&v.play().catch(function(){});return;}var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/hls.js@latest';s.onload=function(){if(window.Hls&&Hls.isSupported()){var h=new Hls();h.loadSource(src);h.attachMedia(v);}};document.head.appendChild(s);}play();})();<\/script>`;
+        }
+
+        if (isLight && direto) {
+            return `<video class="cronos-video" src="${afEscFix(direto)}" data-alt="${afEscFix(proxy && proxy !== direto ? proxy : '')}" controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain" onerror="if(this.dataset.alt&&!this.dataset.tentouAlt){this.dataset.tentouAlt='1';this.src=this.dataset.alt;this.load();this.play&&this.play().catch(function(){});}"></video>`;
+        }
+
+        if (html && String(html).trim()) return html;
+        if (direto) return `<iframe src="${afEscFix(direto)}" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="no-referrer" style="width:100%;height:100%;border:0;background:#000"></iframe>`;
+        return '';
+    }
+
+    function afPlayerSiteFix(urlEpisodio) {
+        const embed = `<iframe src="${afEscFix(urlEpisodio)}" allowfullscreen referrerpolicy="no-referrer" style="width:100%;height:100%;border:0;background:#000"></iframe>`;
+        return { nome:'Ir para o site', provedorId:'site-original', id:'site-original', tipo:'site', src:urlEpisodio, url:urlEpisodio, embed, embedCode:embed, seguro:true, bloqueado:false };
+    }
+
+    function afPrioridadeFix(p, contextoAnimeFire) {
+        if (!p || p.tipo === 'site') return 9000;
+        const txt = afNormFix([p.nome, p.provedorId, p.id, p.src, p.url, p.srcDireto].filter(Boolean).join(' '));
+        if (contextoAnimeFire && /blogger/.test(txt)) return 0;
+        if (afIsLightFix(p)) {
+            const q = afQualFix(p);
+            if (q === 'FHD') return 1;
+            if (q === '720p') return 2;
+            if (q === '480p') return 3;
+            if (q === '360p') return 4;
+            return 5;
+        }
+        if (/blogger/.test(txt)) return 20;
+        return 1000;
+    }
+
+    function afChaveFix(p) {
+        if (!p) return '';
+        if (afIsLightFix(p)) {
+            const q = afQualFix(p);
+            const d = afDiretoFix(p);
+            return 'lightspeed-' + (q || afSlugFix(d || p.nome || 'mp4'));
+        }
+        return afNormFix((p.provedorId || p.id || p.nome || '') + ' ' + (p.src || p.url || afDiretoFix(p) || ''));
+    }
+
+    function afNomeFix(p, contextoAnimeFire) {
+        if (!p) return 'Player';
+        if (afIsLightFix(p) || contextoAnimeFire && afDiretoFix(p)) {
+            const q = afQualFix(p);
+            return q ? `Light Speed ${q}` : 'Light Speed';
+        }
+        return String(p.nome || p.provedorId || p.id || 'Player').replace(/\s+(Direto|Proxy)$/i, '').trim();
+    }
+
+    function afPrepararFix(players, urlEpisodio, engId) {
+        const contextoAnimeFire = afIsAnimeFireFix(urlEpisodio, engId);
+        const arr = [];
+        const vistos = new Set();
+        (Array.isArray(players) ? players : []).forEach(p => {
+            if (!p || p.bloqueado) return;
+            if (!(p.embed || p.embedCode || p.html || p.src || p.srcProxy || p.srcDireto || p.url || p.tipo === 'site')) return;
+            const n = Object.assign({}, p);
+            n.nome = afNomeFix(n, contextoAnimeFire);
+            if (afIsLightFix(n) || contextoAnimeFire && afDiretoFix(n)) {
+                const q = afQualFix(n);
+                n.provedorId = 'lightspeed-' + afSlugFix(q || afDiretoFix(n) || n.nome || 'mp4');
+                n.id = n.provedorId;
+                n.label = q || n.label || '';
+            }
+            n.embed = afEmbedFix(n, contextoAnimeFire);
+            n.embedCode = n.embed;
+            if (!n.embed && n.tipo !== 'site') return;
+            const chave = afChaveFix(n);
+            if (vistos.has(chave)) return;
+            vistos.add(chave);
+            arr.push(n);
+        });
+        if (!arr.length) arr.push(afPlayerSiteFix(urlEpisodio));
+        arr.sort((a,b) => afPrioridadeFix(a, contextoAnimeFire) - afPrioridadeFix(b, contextoAnimeFire));
+        arr.forEach((p,i) => p.index = i + 1);
+        return arr;
+    }
+
+    function afPlayersApiFix(urlEpisodio, engId) {
+        const base = afIsAnimeFireFix(urlEpisodio, engId)
+            ? afBaseFix(AF_PROXY_FIX)
+            : (typeof qcWorkerBase === 'function' ? qcWorkerBase() : String(PROXY || '').replace(/\?url=$/, '').replace(/\/$/, ''));
+        return base + '?modo=players&url=' + encodeURIComponent(urlEpisodio);
+    }
+
+    function afMostrarModalFix(players, callback) {
+        const lista = afPrepararFix(players, (qcPlayerAtualResolvido && qcPlayerAtualResolvido.url) || '', (qcPlayerAtualResolvido && qcPlayerAtualResolvido.engine) || '');
+        if (typeof qcModalEscolha === 'function') {
+            qcModalEscolha('Escolha o Player', `<div class="modal-player-lista-qc">${lista.map((p,i)=>`<button data-af-fix-player="${i}">${typeof qcEscape === 'function' ? qcEscape(p.nome || ('Player ' + (i+1))) : afEscFix(p.nome || ('Player ' + (i+1)))}</button>`).join('')}</div>`);
+            setTimeout(() => {
+                document.querySelectorAll('[data-af-fix-player]').forEach(btn => {
+                    btn.onclick = () => {
+                        const idx = Number(btn.getAttribute('data-af-fix-player'));
+                        const modal = document.getElementById('modalCustom');
+                        const ok = document.getElementById('modalBtnOk');
+                        if (modal) modal.style.display = 'none';
+                        if (ok) ok.style.display = '';
+                        callback(idx, lista);
+                    };
+                });
+            }, 0);
+        } else if (callback) {
+            callback(0, lista);
+        }
+    }
+
+    qcAbrirPlayerResolvido = window.qcAbrirPlayerResolvido = function(player, tituloEpisodio, urlEpisodio, imgCard, engId) {
+        const lista = afPrepararFix([player || afPlayerSiteFix(urlEpisodio)], urlEpisodio, engId);
+        const p = lista[0] || afPlayerSiteFix(urlEpisodio);
+        qcPlayerFornecedorEscolhido = afChaveFix(p) || null;
+        AbrirTelaPlayer(tituloEpisodio, p.embed || p.embedCode || p.html || '', urlEpisodio, imgCard, engId, p.nome || 'Player');
+    };
+
+    buscarEAssistirEpisodio = window.buscarEAssistirEpisodio = function(urlEpisodio, tituloEpisodio, imgCard, engIdOuEpInfo = null) {
+        const engDetectado = typeof engIdOuEpInfo === 'string'
+            ? engIdOuEpInfo
+            : (engIdOuEpInfo && engIdOuEpInfo.engine) || (obraAtual && obraAtual.engine) || '';
+        const st = document.getElementById('statusDetalhes');
+        if (st) {
+            st.innerText = afIsAnimeFireFix(urlEpisodio, engDetectado) ? 'Detectando Light Speed no AnimeFire...' : 'Detectando players...';
+            st.style.display = 'block';
+        }
+
+        fetch(afPlayersApiFix(urlEpisodio, engDetectado), { cache:'no-store' })
+            .then(r => r.json())
+            .then(data => {
+                if (st) st.style.display = 'none';
+                const players = afPrepararFix(data && data.players, urlEpisodio, engDetectado);
+                qcPlayerAtualResolvido = { players, titulo: tituloEpisodio, url: urlEpisodio, img: imgCard, engine: engDetectado };
+                const preferido = qcPlayerFornecedorEscolhido ? players.find(p => afChaveFix(p) === qcPlayerFornecedorEscolhido) : null;
+                qcAbrirPlayerResolvido(preferido || players[0] || afPlayerSiteFix(urlEpisodio), tituloEpisodio, urlEpisodio, imgCard, engDetectado);
+            })
+            .catch(() => {
+                if (st) st.style.display = 'none';
+                const fallback = afPlayerSiteFix(urlEpisodio);
+                qcPlayerAtualResolvido = { players:[fallback], titulo: tituloEpisodio, url:urlEpisodio, img:imgCard, engine:engDetectado };
+                qcAbrirPlayerResolvido(fallback, tituloEpisodio, urlEpisodio, imgCard, engDetectado);
+            });
+    };
+
+    qcTrocarPlayer = window.qcTrocarPlayer = function() {
+        const lista = qcPlayerAtualResolvido && Array.isArray(qcPlayerAtualResolvido.players) ? qcPlayerAtualResolvido.players : [];
+        if (lista.length <= 1) return;
+        qcPlayerFornecedorEscolhido = null;
+        afMostrarModalFix(lista, (idx, ordenada) => {
             const p = (ordenada && ordenada[idx]) || lista[idx] || lista[0];
             qcAbrirPlayerResolvido(p, qcPlayerAtualResolvido.titulo, qcPlayerAtualResolvido.url, qcPlayerAtualResolvido.img, qcPlayerAtualResolvido.engine);
         });
