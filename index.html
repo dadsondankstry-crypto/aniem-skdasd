@@ -1500,7 +1500,7 @@ button,
 // CORE: QUAD-CORE ENGINE V3.0
 // ========================================================
 const PROXY = 'https://winter-cherry-3baa.getapi-oi.workers.dev/?url=';
-const PROXY_ANIMEFIRE = 'https://delicate-sea-41ab.getapi-oi.workers.dev/?url=';
+const PROXY_ANIMEFIRE = 'https://late-king-100e.getapi-oi.workers.dev/?url=';
 const SELETORES_AGRESSIVOS = '.w_item_b, .item, .card, article.anime, .anime-box, article, .result-item, ul.items li, .box-item, .post-item, .boxAN, .boxEP, .containerAnimes, .cardUltimosEps, .divCardUltimosEpsHome';
 
 const ENGINES = {
@@ -4772,6 +4772,215 @@ if (typeof EngineHub !== 'undefined' && EngineHub.montarCardUI && !EngineHub.__s
         });
     };
     window.qcTrocarPlayer = qcTrocarPlayer;
+})();
+
+
+
+/* =========================================================
+   PATCH GITHUB / VERCEL — ANIMEFIRE LIGHT SPEED RANGE
+   - Mantém ANQ/AOC/GYB no Worker geral.
+   - AnimeFire usa Worker próprio em modo players/video.
+   - No GitHub/Vercel, o Light Speed abre pelo proxy de vídeo com Range.
+   ========================================================= */
+(function(){
+    if (window.__CRONOS_ANIMEFIRE_GITHUB_RANGE_FIX__) return;
+    window.__CRONOS_ANIMEFIRE_GITHUB_RANGE_FIX__ = true;
+
+    const AF_PROXY_PADRAO = (typeof PROXY_ANIMEFIRE !== 'undefined' && PROXY_ANIMEFIRE)
+        ? String(PROXY_ANIMEFIRE)
+        : 'https://delicate-sea-41ab.getapi-oi.workers.dev/?url=';
+    const GERAL_PROXY_PADRAO = (typeof PROXY !== 'undefined' && PROXY)
+        ? String(PROXY)
+        : 'https://winter-cherry-3baa.getapi-oi.workers.dev/?url=';
+
+    function afBaseProxyCRONOS(proxy) {
+        return String(proxy || '').replace(/\?url=$/, '').replace(/\/$/, '');
+    }
+    function afEscCRONOS(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function afNormCRONOS(v) {
+        return String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    }
+    function afSlugCRONOS(v) {
+        return afNormCRONOS(v).replace(/\s+/g, '-') || 'player';
+    }
+    function afIsAnimeFireCRONOS(url, engId) {
+        return engId === 'af' || /animefire\.io/i.test(String(url || ''));
+    }
+    function afIsLightCRONOS(p) {
+        const s = afNormCRONOS([p && p.nome, p && p.provedorId, p && p.id, p && p.src, p && p.srcDireto, p && p.srcProxy, p && p.url, p && p.origem].filter(Boolean).join(' '));
+        return /light speed|lightspeed|speedst|animefire/.test(s);
+    }
+    function afQualCRONOS(p) {
+        const s = afNormCRONOS([p && p.nome, p && p.label, p && p.qualidade, p && p.quality, p && p.src, p && p.srcDireto, p && p.url].filter(Boolean).join(' '));
+        if (/1080|full hd|fullhd|fhd/.test(s)) return 'FHD';
+        if (/720|\bhd\b/.test(s)) return '720p';
+        if (/480/.test(s)) return '480p';
+        if (/360|\bsd\b/.test(s)) return '360p';
+        return '';
+    }
+    function afVideoProxyCRONOS(url) {
+        if (!url) return '';
+        return afBaseProxyCRONOS(AF_PROXY_PADRAO) + '?modo=video&url=' + encodeURIComponent(url);
+    }
+    function afPlayersApiCRONOS(urlEpisodio, engId) {
+        const base = afIsAnimeFireCRONOS(urlEpisodio, engId) ? afBaseProxyCRONOS(AF_PROXY_PADRAO) : afBaseProxyCRONOS(GERAL_PROXY_PADRAO);
+        return base + '?modo=players&url=' + encodeURIComponent(urlEpisodio);
+    }
+    function afPlayerSiteCRONOS(urlEpisodio) {
+        const safe = afEscCRONOS(urlEpisodio);
+        const embed = `<div style="width:100%;height:100%;background:#000;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff;text-align:center;font-family:Arial;padding:20px;box-sizing:border-box"><h2 style="color:#ffcc00;margin:0 0 12px;font-size:26px">Abrir no site original</h2><p style="max-width:560px;line-height:1.35;margin:0 0 18px">Nenhum player tocável foi detectado pelo Worker.</p><a href="${safe}" target="_blank" rel="noopener" style="background:#00ffff;color:#000;padding:15px 28px;border-radius:7px;text-decoration:none;font-weight:900;letter-spacing:1px">IR PARA O SITE</a></div>`;
+        return { nome:'Ir para o site', provedorId:'site-original', id:'site-original', tipo:'site', src:urlEpisodio, url:urlEpisodio, embed, embedCode:embed, seguro:true, bloqueado:false };
+    }
+    function afEmbedCRONOS(p, contextoAnimeFire) {
+        const out = Object.assign({}, p || {});
+        const html = out.embed || out.embedCode || out.html || '';
+        const isLight = afIsLightCRONOS(out);
+
+        if (!contextoAnimeFire && !isLight && html && String(html).trim()) return html;
+        if (contextoAnimeFire && !isLight && html && String(html).trim() && !out.src && !out.srcDireto && !out.srcProxy) return html;
+
+        const direto = out.srcDireto || out.src || out.url || '';
+        const proxy = out.srcProxy || afVideoProxyCRONOS(direto);
+        if (!direto && !proxy) return html || '';
+
+        const host = String(location.hostname || '').toLowerCase();
+        const local = ['localhost','127.0.0.1','0.0.0.0'].includes(host);
+        const onlineSeguro = location.protocol === 'https:' || location.protocol === 'file:';
+        let src = '';
+        let alt = '';
+
+        if (contextoAnimeFire && onlineSeguro) {
+            src = proxy || direto;
+            alt = (direto && direto !== src && !/^http:\/\//i.test(direto)) ? direto : '';
+        } else if (local) {
+            src = direto || proxy;
+            alt = proxy && proxy !== src ? proxy : '';
+        } else {
+            src = proxy || direto;
+            alt = direto && direto !== src ? direto : '';
+        }
+
+        const isM3u8 = /\.m3u8(\?|#|$)/i.test(direto || src);
+        if (isM3u8) {
+            const id = 'hls_' + Math.random().toString(36).slice(2);
+            return `<video id="${id}" class="cronos-video" controls autoplay playsinline preload="auto" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video><script>(function(){var v=document.getElementById('${id}');var src='${afEscCRONOS(src)}';function play(){if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=src;v.play&&v.play().catch(function(){});return;}var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/hls.js@latest';s.onload=function(){if(window.Hls&&Hls.isSupported()){var h=new Hls();h.loadSource(src);h.attachMedia(v);}};document.head.appendChild(s);}play();})();<\/script>`;
+        }
+
+        const msgErro = "Este player bloqueou no navegador. Use Trocar Player ou atualize o Worker AnimeFire.";
+        return `<video class="cronos-video" src="${afEscCRONOS(src)}" data-alt="${afEscCRONOS(alt)}" controls autoplay playsinline preload="auto" crossorigin="anonymous" style="width:100%;height:100%;background:#000;display:block;object-fit:contain" onerror="if(this.dataset.alt&&!this.dataset.tentouAlt){this.dataset.tentouAlt='1';this.src=this.dataset.alt;this.load();this.play&&this.play().catch(function(){});}else{this.insertAdjacentHTML('afterend','<div style=&quot;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#ffcc00;text-align:center;font-weight:900;padding:20px&quot;>${msgErro}</div>');}"></video>`;
+    }
+    function afNormalizarCRONOS(p, urlEpisodio, engId) {
+        const contextoAnimeFire = afIsAnimeFireCRONOS(urlEpisodio, engId);
+        const out = Object.assign({}, p || {});
+        if (afIsLightCRONOS(out) || contextoAnimeFire && (out.src || out.srcDireto || out.srcProxy)) {
+            const q = afQualCRONOS(out);
+            if (!out.nome || /player|animefire|light/i.test(out.nome)) out.nome = q ? `Light Speed ${q}` : 'Light Speed';
+            out.provedorId = out.provedorId || `lightspeed-${afSlugCRONOS(q || out.nome || 'mp4')}`;
+            out.id = out.id || out.provedorId;
+            out.label = out.label || q;
+        }
+        out.embed = afEmbedCRONOS(out, contextoAnimeFire);
+        out.embedCode = out.embed;
+        return out;
+    }
+    function afPrioridadeCRONOS(p, contextoAnimeFire) {
+        if (!p || p.tipo === 'site') return 9000;
+        const txt = afNormCRONOS([p.nome, p.provedorId, p.id, p.src, p.url].filter(Boolean).join(' '));
+        if (contextoAnimeFire && /blogger/.test(txt)) return 0;
+        if (/light speed|lightspeed|speedst/.test(txt)) {
+            const q = afQualCRONOS(p);
+            if (q === 'FHD') return 1;
+            if (q === '720p') return 2;
+            if (q === '480p') return 3;
+            if (q === '360p') return 4;
+            return 5;
+        }
+        if (/blogger/.test(txt)) return 20;
+        return 1000;
+    }
+    function afPrepararCRONOS(players, urlEpisodio, engId) {
+        const vistos = new Set();
+        const contextoAnimeFire = afIsAnimeFireCRONOS(urlEpisodio, engId);
+        const arr = [];
+        (Array.isArray(players) ? players : []).forEach(p => {
+            if (!p || p.bloqueado) return;
+            if (!(p.embed || p.embedCode || p.html || p.src || p.srcProxy || p.srcDireto || p.url || p.tipo === 'site')) return;
+            const n = afNormalizarCRONOS(p, urlEpisodio, engId);
+            const chave = afIsLightCRONOS(n)
+                ? `lightspeed-${afQualCRONOS(n) || afSlugCRONOS(n.src || n.url || n.nome)}`
+                : afNormCRONOS((n.provedorId || n.id || n.nome || '') + ' ' + (n.src || n.url || ''));
+            if (vistos.has(chave)) return;
+            vistos.add(chave);
+            arr.push(n);
+        });
+        if (!arr.length) arr.push(afPlayerSiteCRONOS(urlEpisodio));
+        arr.sort((a,b) => afPrioridadeCRONOS(a, contextoAnimeFire) - afPrioridadeCRONOS(b, contextoAnimeFire));
+        arr.forEach((p,i) => p.index = i + 1);
+        return arr;
+    }
+    function afChaveCRONOS(p) {
+        return p ? String(p.provedorId || p.id || p.nome || '') : '';
+    }
+    function afMostrarModalCRONOS(players, callback) {
+        const lista = afPrepararCRONOS(players, (qcPlayerAtualResolvido && qcPlayerAtualResolvido.url) || '', (qcPlayerAtualResolvido && qcPlayerAtualResolvido.engine) || '');
+        qcModalEscolha('Escolha o Player', `<div class="modal-player-lista-qc">${lista.map((p,i)=>`<button data-af-player-cronos="${i}">${qcEscape(p.nome || (p.tipo === 'site' ? 'Ir para o site' : ('Player ' + (i+1))))}</button>`).join('')}</div>`);
+        setTimeout(() => {
+            document.querySelectorAll('[data-af-player-cronos]').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = Number(btn.getAttribute('data-af-player-cronos'));
+                    const modal = document.getElementById('modalCustom');
+                    if (modal) modal.style.display = 'none';
+                    const ok = document.getElementById('modalBtnOk');
+                    if (ok) ok.style.display = '';
+                    callback(idx, lista);
+                };
+            });
+        }, 0);
+    }
+
+    qcAbrirPlayerResolvido = window.qcAbrirPlayerResolvido = function(player, tituloEpisodio, urlEpisodio, imgCard, engId) {
+        player = afNormalizarCRONOS(player || afPlayerSiteCRONOS(urlEpisodio), urlEpisodio, engId);
+        qcPlayerFornecedorEscolhido = afChaveCRONOS(player) || null;
+        AbrirTelaPlayer(tituloEpisodio, player.embed || player.embedCode || player.html || '', urlEpisodio, imgCard, engId, player.nome || 'Player');
+    };
+
+    buscarEAssistirEpisodio = window.buscarEAssistirEpisodio = function(urlEpisodio, tituloEpisodio, imgCard, engIdOuEpInfo = null) {
+        const engDetectado = typeof engIdOuEpInfo === 'string'
+            ? engIdOuEpInfo
+            : (engIdOuEpInfo && engIdOuEpInfo.engine) || (obraAtual && obraAtual.engine) || '';
+        const st = document.getElementById('statusDetalhes');
+        if (st) {
+            st.innerText = afIsAnimeFireCRONOS(urlEpisodio, engDetectado) ? 'Detectando Light Speed no AnimeFire...' : 'Detectando players...';
+            st.style.display = 'block';
+        }
+        fetch(afPlayersApiCRONOS(urlEpisodio, engDetectado), { cache:'no-store' })
+            .then(r => r.json())
+            .then(data => {
+                if (st) st.style.display = 'none';
+                const players = afPrepararCRONOS(data && data.players, urlEpisodio, engDetectado);
+                qcPlayerAtualResolvido = { players, titulo: tituloEpisodio, url: urlEpisodio, img: imgCard, engine: engDetectado };
+                const preferido = qcPlayerFornecedorEscolhido ? players.find(p => afChaveCRONOS(p) === qcPlayerFornecedorEscolhido) : null;
+                qcAbrirPlayerResolvido(preferido || players[0] || afPlayerSiteCRONOS(urlEpisodio), tituloEpisodio, urlEpisodio, imgCard, engDetectado);
+            })
+            .catch(() => {
+                if (st) st.style.display = 'none';
+                const fallback = afPlayerSiteCRONOS(urlEpisodio);
+                qcPlayerAtualResolvido = { players:[fallback], titulo: tituloEpisodio, url:urlEpisodio, img:imgCard, engine:engDetectado };
+                qcAbrirPlayerResolvido(fallback, tituloEpisodio, urlEpisodio, imgCard, engDetectado);
+            });
+    };
+
+    qcTrocarPlayer = window.qcTrocarPlayer = function() {
+        const lista = qcPlayerAtualResolvido && Array.isArray(qcPlayerAtualResolvido.players) ? qcPlayerAtualResolvido.players : [];
+        if (lista.length <= 1) return;
+        qcPlayerFornecedorEscolhido = null;
+        afMostrarModalCRONOS(lista, (idx, ordenada) => {
+            const p = (ordenada && ordenada[idx]) || lista[idx] || lista[0];
+            qcAbrirPlayerResolvido(p, qcPlayerAtualResolvido.titulo, qcPlayerAtualResolvido.url, qcPlayerAtualResolvido.img, qcPlayerAtualResolvido.engine);
+        });
+    };
 })();
 
 
