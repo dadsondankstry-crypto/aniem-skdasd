@@ -14733,7 +14733,7 @@ const ROTAS_TELA = {
         const host = dominioDe(url);
         if(host !== 'superembeds.com') return false;
         const path = caminhoDe(url).replace(/\/+$/,'');
-        return /^\/embed\/[A-Za-z0-9_.:-]+$/i.test(path);
+        return /^\/embed\/[A-Za-z0-9_.:-]+(?:\/\d+\/\d+)?$/i.test(path);
     }
     function ehDominioPuroSuperembeds(url){
         const host = dominioDe(url);
@@ -15755,7 +15755,7 @@ const ROTAS_TELA = {
         return false;
     }
     function validSuperembeds(url){
-        return hostOf(url) === 'superembeds.com' && /^\/embed\/[A-Za-z0-9_.:-]+$/i.test(pathOf(url));
+        return hostOf(url) === 'superembeds.com' && /^\/embed\/[A-Za-z0-9_.:-]+(?:\/\d+\/\d+)?$/i.test(pathOf(url));
     }
     function validGroupUrl(url){
         const h = hostOf(url), p = pathOf(url);
@@ -16471,6 +16471,196 @@ const ROTAS_TELA = {
     removerEbaDaTela();
     setTimeout(removerEbaDaTela, 500);
     setTimeout(removerEbaDaTela, 2000);
+})();
+</script>
+
+
+<script id="cronos-fix-superembeds-github-v1">
+/*
+  FIX CRONOS — SuperEmbeds no GitHub/Vercel
+  Problema tratado:
+  - links sem protocolo virando rota interna do GitHub Pages;
+  - links superembeds.com/embed/... retornando 404;
+  - recuperação de URL quando ela já foi transformada em /superembeds.com/embed/... dentro do domínio do site.
+*/
+(function(){
+    if (window.__CRONOS_FIX_SUPEREMBEDS_GITHUB_V1__) return;
+    window.__CRONOS_FIX_SUPEREMBEDS_GITHUB_V1__ = true;
+
+    const HOSTS_PLAYER_CRONOS = [
+        'superembeds.com',
+        'multiembed.mov',
+        'playerembedapi.link',
+        'warezcdn.lat',
+        'superflixapi.best',
+        'superflixapi.online',
+        'viewplayer.online',
+        'playerthree.online',
+        'abyssplayer.com',
+        'lisoflix.net',
+        'hubby.cx'
+    ];
+
+    function limparUrlCronos(url){
+        let u = String(url || '').trim();
+        if (!u) return '';
+        u = u.replace(/&amp;/g, '&')
+             .replace(/&#038;/g, '&')
+             .replace(/\\/g, '')
+             .replace(/["'<>]/g, '')
+             .trim();
+        try {
+            if (/%3A%2F%2F/i.test(u) || /%2F/i.test(u)) u = decodeURIComponent(u);
+        } catch(e) {}
+        return u.split(/\s+/)[0].trim();
+    }
+
+    function hostConhecidoSemProtocolo(u){
+        return HOSTS_PLAYER_CRONOS.some(h => new RegExp('^(?:www\\.)?' + h.replace(/\./g, '\\.') + '(?:/|\\?|#|$)', 'i').test(u));
+    }
+
+    function recuperarUrlPlayerPerdida(u){
+        u = limparUrlCronos(u);
+        if (!u) return '';
+
+        // Quando o navegador transforma "superembeds.com/embed/..." em
+        // "https://usuario.github.io/projeto/superembeds.com/embed/...", recupera a URL real.
+        const padroes = [
+            /((?:https?:)?\/\/(?:www\.)?superembeds\.com\/embed\/[^\s"'<>]+)/i,
+            /((?:https?:)?\/\/(?:www\.)?multiembed\.mov\/[^\s"'<>]+)/i,
+            /((?:https?:)?\/\/(?:www\.)?playerembedapi\.link\/\?v=[^\s"'<>]+)/i,
+            /((?:https?:)?\/\/(?:www\.)?warezcdn\.lat\/(?:filme|serie)\/[^\s"'<>]+)/i,
+            /((?:https?:)?\/\/(?:www\.)?superflixapi\.(?:best|online)\/(?:filme|serie)\/[^\s"'<>]+)/i
+        ];
+        for (const reg of padroes) {
+            const m = u.match(reg);
+            if (m && m[1]) {
+                let achada = m[1];
+                if (achada.startsWith('//')) achada = 'https:' + achada;
+                return achada;
+            }
+        }
+
+        // Recupera domínio conhecido embutido no caminho, mesmo sem protocolo.
+        const m2 = u.match(/(?:^|\/)((?:www\.)?superembeds\.com\/embed\/[^\s"'<>]+)/i)
+              || u.match(/(?:^|\/)((?:www\.)?multiembed\.mov\/[^\s"'<>]+)/i)
+              || u.match(/(?:^|\/)((?:www\.)?playerembedapi\.link\/\?v=[^\s"'<>]+)/i)
+              || u.match(/(?:^|\/)((?:www\.)?warezcdn\.lat\/(?:filme|serie)\/[^\s"'<>]+)/i)
+              || u.match(/(?:^|\/)((?:www\.)?superflixapi\.(?:best|online)\/(?:filme|serie)\/[^\s"'<>]+)/i);
+        if (m2 && m2[1]) return 'https://' + m2[1].replace(/^www\./i, '');
+
+        return u;
+    }
+
+    function superembedsParaMultiembed(u){
+        u = limparUrlCronos(u);
+        if (!u) return '';
+        let urlObj;
+        try { urlObj = new URL(u); } catch(e) { return u; }
+
+        const host = urlObj.hostname.replace(/^www\./i, '').toLowerCase();
+        if (host !== 'superembeds.com') return u;
+
+        const partes = urlObj.pathname.split('/').filter(Boolean);
+        if (!partes.length || partes[0].toLowerCase() !== 'embed') return u;
+
+        const id = partes[1] || urlObj.searchParams.get('video_id') || urlObj.searchParams.get('id') || '';
+        if (!id) return u;
+
+        const season = urlObj.searchParams.get('s') || urlObj.searchParams.get('season') || partes[2] || '';
+        const episode = urlObj.searchParams.get('e') || urlObj.searchParams.get('episode') || partes[3] || '';
+
+        const out = new URL('https://multiembed.mov/');
+        out.searchParams.set('video_id', id);
+        if (/^\d+$/.test(id)) out.searchParams.set('tmdb', '1');
+        if (season) out.searchParams.set('s', String(parseInt(season, 10) || season));
+        if (episode) out.searchParams.set('e', String(parseInt(episode, 10) || episode));
+        return out.href;
+    }
+
+    function normalizarPlayerCronos(url, base){
+        try {
+            let u = recuperarUrlPlayerPerdida(url);
+            if (!u) return '';
+            if (u.startsWith('//')) u = 'https:' + u;
+            if (hostConhecidoSemProtocolo(u)) u = 'https://' + u.replace(/^www\./i, '');
+            if (/^\/\/(?:www\.)?/i.test(u)) u = 'https:' + u;
+            if (!/^https?:\/\//i.test(u) && u.startsWith('/')) {
+                u = new URL(u, base || location.href).href;
+                u = recuperarUrlPlayerPerdida(u);
+            }
+            if (!/^https?:\/\//i.test(u) && base) {
+                try {
+                    u = new URL(u, base).href;
+                    u = recuperarUrlPlayerPerdida(u);
+                } catch(e) {}
+            }
+            if (u.startsWith('//')) u = 'https:' + u;
+            if (hostConhecidoSemProtocolo(u)) u = 'https://' + u.replace(/^www\./i, '');
+            return superembedsParaMultiembed(u);
+        } catch(e) {
+            return limparUrlCronos(url);
+        }
+    }
+
+    function ehSuperEmbedsCronos(url){
+        const u = String(url || '').toLowerCase();
+        return /superembeds\.com\/embed\//i.test(u) || /multiembed\.mov/i.test(u);
+    }
+
+    const normalizadorAnterior = window.cronosNormalizarUrlPlayer;
+    window.cronosNormalizarUrlPlayer = function(url, base){
+        const corrigida = normalizarPlayerCronos(url, base || (window.obraSendoVista && window.obraSendoVista.baseUrl) || location.href);
+        if (corrigida) return corrigida;
+        if (typeof normalizadorAnterior === 'function') return normalizadorAnterior.call(this, url, base);
+        return limparUrlCronos(url);
+    };
+
+    window.cronosFixarUrlPlayer = normalizarPlayerCronos;
+
+    const abrirAnterior = window.abrirPlayer;
+    if (typeof abrirAnterior === 'function' && !abrirAnterior.__cronosFixSuperEmbedsGithubV1) {
+        window.abrirPlayer = function(titulo, urlVideo, meta){
+            const original = String(urlVideo || '');
+            const corrigida = normalizarPlayerCronos(original, (window.obraSendoVista && window.obraSendoVista.baseUrl) || location.href) || original;
+            let metaNova = meta;
+            if (ehSuperEmbedsCronos(original) || ehSuperEmbedsCronos(corrigida)) {
+                metaNova = Object.assign({}, meta || {}, {
+                    playerNome: (meta && meta.playerNome) || 'SuperEmbeds',
+                    playerClasse: (meta && meta.playerClasse) || 'superembeds',
+                    src: corrigida
+                });
+                try { window.__cronosPlayerNomeAtual = 'SuperEmbeds'; } catch(e) {}
+            }
+            const r = abrirAnterior.call(this, titulo, corrigida, metaNova);
+            setTimeout(function(){
+                const iframe = document.getElementById('iframePlayer');
+                if (!iframe) return;
+                const atual = iframe.getAttribute('src') || iframe.src || '';
+                const fix = normalizarPlayerCronos(atual, location.href);
+                if (fix && fix !== atual && iframe.src !== fix) iframe.src = fix;
+            }, 30);
+            return r;
+        };
+        window.abrirPlayer.__cronosFixSuperEmbedsGithubV1 = true;
+        try { abrirPlayer = window.abrirPlayer; } catch(e) {}
+    }
+
+    // Segurança extra: se algum trecho antigo colocar o src direto no iframe, corrige em seguida.
+    function corrigirIframeDireto(){
+        const iframe = document.getElementById('iframePlayer');
+        if (!iframe || iframe.__cronosFixSuperEmbedsObserverV1) return;
+        iframe.__cronosFixSuperEmbedsObserverV1 = true;
+        const obs = new MutationObserver(function(){
+            const atual = iframe.getAttribute('src') || '';
+            const fix = normalizarPlayerCronos(atual, location.href);
+            if (fix && fix !== atual) iframe.setAttribute('src', fix);
+        });
+        try { obs.observe(iframe, { attributes:true, attributeFilter:['src'] }); } catch(e) {}
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', corrigirIframeDireto);
+    else corrigirIframeDireto();
 })();
 </script>
 
