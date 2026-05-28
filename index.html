@@ -5271,202 +5271,191 @@ if (typeof EngineHub !== 'undefined' && EngineHub.montarCardUI && !EngineHub.__s
 
 </script>
 
-<script id="cronos-file-local-fix">
+<script id="cronos-github-animefire-fix">
 /*
-  CRONOS FIX — Arquivo local (file://) + GitHub Pages
-  =====================================================
-  Problema: quando aberto via duplo clique (file://), o fetch()
-  ao Worker falha por política CORS do navegador.
-  Resultado: cai no catch e abre iframe do site — sem vídeo.
+  CRONOS FIX v2 — GitHub Pages + file:// + AnimeFire Light Speed
+  ================================================================
+  Problema: o servidor do AnimeFire (lightspeedst.net) bloqueia
+  requisições diretas vindas de github.io, localhost ou file://.
+  O <video src="https://lightspeedst.net/..."> fica em branco.
 
-  Solução:
-  1. Detecta file:// ou origem não-http
-  2. Força o fetch com credentials: 'omit' e mode: 'cors'
-  3. Se o Worker retornar srcDireto (MP4/M3U8), abre o vídeo
-     direto sem proxy — funciona em qualquer origem
-  4. Fallback automático para o proxy do Worker se o direto falhar
+  Causa raiz: o lightspeedst.net verifica o Referer HTTP.
+  Quando vem de github.io ele rejeita com 403.
+
+  Solução: usar SEMPRE o srcProxy do Worker para o vídeo,
+  que adiciona o Referer correto (animefire.io) ao buscar.
 */
 (function(){
-    if (window.__CRONOS_FILE_LOCAL_FIX__) return;
-    window.__CRONOS_FILE_LOCAL_FIX__ = true;
+    if (window.__CRONOS_GITHUB_AF_FIX__) return;
+    window.__CRONOS_GITHUB_AF_FIX__ = true;
 
-    // Detecta se está rodando localmente (file:// ou localhost)
-    const isLocal = location.protocol === 'file:'
-        || location.hostname === 'localhost'
-        || location.hostname === '127.0.0.1'
-        || location.hostname === '';
+    // Detecta origens que precisam do proxy obrigatório
+    const proto = location.protocol;
+    const host  = location.hostname;
+    const needsProxy = proto === 'file:'
+        || host === 'localhost'
+        || host === '127.0.0.1'
+        || proto === 'https:'   // github.io, vercel, netlify — todos precisam
+        || proto === 'http:' && host !== '';
 
-    // Detecta GitHub Pages / Vercel / Netlify (origem https mas não é o Worker)
-    const isHosted = location.protocol === 'https:' && location.hostname !== '';
+    if (!needsProxy) return;
 
-    if (!isLocal && !isHosted) return;
-
-    // Worker AnimeFire
+    // Worker do AnimeFire
     const AF_WORKER = (typeof PROXY_ANIMEFIRE !== 'undefined' && PROXY_ANIMEFIRE)
         ? String(PROXY_ANIMEFIRE).replace(/\?url=$/, '').replace(/\/$/, '')
         : 'https://late-king-100e.getapi-oi.workers.dev';
 
-    // Worker Geral (fallback)
+    // Worker Geral
     const GERAL_WORKER = (typeof PROXY !== 'undefined' && PROXY)
         ? String(PROXY).replace(/\?url=$/, '').replace(/\/$/, '')
-        : 'https://fragrant-unit-a421.dadsondankstry.workers.dev';
+        : '';
 
-    function isAnimeFireUrl(url) {
+    function isAF(url) {
         return /animefire\.io/i.test(String(url || ''));
     }
 
     function workerBase(url) {
-        return isAnimeFireUrl(url) ? AF_WORKER : GERAL_WORKER;
+        return isAF(url) ? AF_WORKER : (GERAL_WORKER || AF_WORKER);
     }
 
-    function playersApiUrl(epUrl) {
-        return workerBase(epUrl) + '/?modo=players&url=' + encodeURIComponent(epUrl);
+    function playersApi(url) {
+        return workerBase(url) + '/?modo=players&url=' + encodeURIComponent(url);
     }
 
-    function escHtml(s) {
-        return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    function esc(s) {
+        return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // Extrai URL direta do MP4/M3U8 de um player
-    function getDiretoUrl(p) {
-        const candidatos = [
-            p && p.srcDireto,
-            p && p.src,
-            p && p.url,
-        ].filter(s => s && /^https?:\/\//i.test(s));
+    // Pega a melhor URL do player — prefere srcProxy
+    function getSrc(p, workerUrl) {
+        // srcProxy já tem o Worker como proxy — usa sempre
+        if (p.srcProxy && /^https?:\/\//i.test(p.srcProxy)) return p.srcProxy;
 
-        // Tenta extrair de srcProxy (remove o prefixo do worker)
-        if (!candidatos.length && p && p.srcProxy) {
-            try {
-                const x = new URL(String(p.srcProxy));
-                const u = x.searchParams.get('url') || x.searchParams.get('u') || '';
-                if (u) candidatos.push(u);
-            } catch(e) {}
+        // Se tem srcDireto (MP4), envelopa no Worker
+        const direto = p.srcDireto || p.src || p.url || '';
+        if (direto && /\.(mp4|m3u8)(\?|#|$)|lightspeedst/i.test(direto)) {
+            return workerUrl + '/?url=' + encodeURIComponent(direto);
         }
 
-        // Tenta extrair do embed HTML
-        if (!candidatos.length && p && (p.embed || p.embedCode)) {
-            const m = String(p.embed || p.embedCode || '').match(/src=["']([^"']+\.mp4[^"']*)["']/i)
-                || String(p.embed || p.embedCode || '').match(/src=["']([^"']+lightspeedst[^"']*)["']/i)
-                || String(p.embed || p.embedCode || '').match(/src=["']([^"']+\.m3u8[^"']*)["']/i);
-            if (m) candidatos.push(m[1].replace(/&amp;/g,'&'));
-        }
-
-        return candidatos[0] || '';
+        // embed HTML — retorna como está
+        return direto || '';
     }
 
-    // Monta um elemento <video> que tenta direto, fallback pro proxy
-    function montarVideoElement(direto, proxyUrl, qualidade) {
-        const qual = qualidade ? ` — ${qualidade}` : '';
-        const id = 'cronos_video_fix_' + Math.random().toString(36).slice(2);
-        
-        if (/\.m3u8(\?|#|$)/i.test(direto)) {
-            // HLS — usa hls.js
-            return `<video id="${id}" class="cronos-video" controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video>` +
-                `<script>(function(){var v=document.getElementById('${id}');var src='${escHtml(direto)}';` +
-                `if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=src;v.play&&v.play().catch(function(){});return;}` +
-                `var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/hls.js@latest';` +
-                `s.onload=function(){if(window.Hls&&Hls.isSupported()){var h=new Hls();h.loadSource(src);h.attachMedia(v);v.play&&v.play().catch(function(){});}};` +
-                `document.head.appendChild(s);})()</\/script>`;
-        }
-
-        // MP4 direto com fallback pro proxy
-        const proxyAttr = (proxyUrl && proxyUrl !== direto) ? ` data-alt="${escHtml(proxyUrl)}"` : '';
-        return `<video class="cronos-video" src="${escHtml(direto)}"${proxyAttr} controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain" onerror="if(this.dataset.alt&&!this.dataset.tentouAlt){this.dataset.tentouAlt='1';this.src=this.dataset.alt;this.load();this.play&&this.play().catch(function(){});}"></video>`;
-    }
-
-    // Qualidade do player
     function getQual(p) {
-        const s = [p.nome, p.label, p.qualidade, p.src, p.srcDireto, p.url]
+        const s = [p.nome, p.label, p.qualidade, p.src, p.srcDireto]
             .filter(Boolean).join(' ').toLowerCase()
             .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         if (/1080|fhd|fullhd/.test(s)) return 'FHD';
-        if (/720|\bhd\b/.test(s)) return '720p';
+        if (/720|(?<![0-9])hd(?![0-9])/.test(s)) return '720p';
         if (/480/.test(s)) return '480p';
-        if (/360|\bsd\b/.test(s)) return '360p';
+        if (/360|(?<![0-9])sd(?![0-9])/.test(s)) return '360p';
         return '';
     }
 
-    // Intercepta buscarEAssistirEpisodio para forçar modo cors
-    const _buscarOriginal = window.buscarEAssistirEpisodio;
-    if (typeof _buscarOriginal === 'function' && !_buscarOriginal.__cronosFileLocalFix) {
+    function montarVideo(proxyMp4, qual) {
+        // Verifica se é HLS
+        if (/\.m3u8(\?|#|$)/i.test(proxyMp4)) {
+            const id = 'v_' + Math.random().toString(36).slice(2);
+            return `<video id="${id}" class="cronos-video" controls autoplay playsinline preload="auto" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video>`
+                + `<script>(function(){var v=document.getElementById('${id}'),src='${esc(proxyMp4)}';`
+                + `if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=src;v.play&&v.play().catch(function(){});return;}`
+                + `var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/hls.js@latest';`
+                + `s.onload=function(){if(Hls.isSupported()){var h=new Hls();h.loadSource(src);h.attachMedia(v);v.play&&v.play().catch(function(){});}};`
+                + `document.head.appendChild(s);})()</`+`script>`;
+        }
+        return `<video class="cronos-video" src="${esc(proxyMp4)}" controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video>`;
+    }
 
-        window.buscarEAssistirEpisodio = function(urlEpisodio, tituloEpisodio, imgCard, engIdOuEpInfo) {
+    function montarEmbed(p, wBase) {
+        const proxyUrl = getSrc(p, wBase);
+        const qual = getQual(p);
+        const isVideo = /\.(mp4|m3u8)(\?|#|$)|lightspeedst|\/\?url=/i.test(proxyUrl);
+
+        if (isVideo && proxyUrl) return montarVideo(proxyUrl, qual);
+
+        // Tem embed HTML — usa diretamente
+        if (p.embed && p.embed.trim()) return p.embed;
+        if (p.embedCode && p.embedCode.trim()) return p.embedCode;
+
+        // Fallback: iframe do Worker
+        if (proxyUrl) {
+            return `<iframe src="${esc(proxyUrl)}" allow="autoplay; fullscreen" allowfullscreen style="width:100%;height:100%;border:0;background:#000"></iframe>`;
+        }
+        return '';
+    }
+
+    // Aguarda os outros patches carregarem antes de instalar
+    function instalar() {
+        const _orig = window.buscarEAssistirEpisodio;
+        if (typeof _orig !== 'function' || _orig.__cronosGHFix) return;
+
+        window.buscarEAssistirEpisodio = function(urlEp, titulo, imgCard, engOuInfo) {
+            const engId = typeof engOuInfo === 'string'
+                ? engOuInfo
+                : (engOuInfo && engOuInfo.engine) || (window.obraAtual && window.obraAtual.engine) || '';
+
             const st = document.getElementById('statusDetalhes');
             if (st) { st.innerText = 'Carregando player...'; st.style.display = 'block'; }
 
-            const api = playersApiUrl(urlEpisodio);
+            const wBase = workerBase(urlEp);
+            const api   = playersApi(urlEp);
 
-            fetch(api, {
-                cache: 'no-store',
-                mode: 'cors',
-                credentials: 'omit'
-            })
-            .then(r => {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(data => {
-                if (st) st.style.display = 'none';
+            fetch(api, { mode: 'cors', credentials: 'omit', cache: 'no-store' })
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(data => {
+                    if (st) st.style.display = 'none';
 
-                const players = (data && Array.isArray(data.players) ? data.players : [])
-                    .filter(p => p && !p.bloqueado && (getDiretoUrl(p) || p.embed || p.embedCode));
+                    const todos = Array.isArray(data && data.players) ? data.players : [];
+                    const validos = todos.filter(p => p && !p.bloqueado
+                        && (p.srcProxy || p.srcDireto || p.src || p.embed || p.embedCode));
 
-                if (!players.length) {
-                    // Sem players — chama o original como fallback
-                    return _buscarOriginal.apply(this, arguments);
-                }
+                    if (!validos.length) {
+                        console.warn('[CRONOS GH FIX] Nenhum player válido — usando fallback original');
+                        return _orig.apply(window, arguments);
+                    }
 
-                // Monta o embed para o primeiro player (melhor qualidade)
-                const p = players[0];
-                const direto = getDiretoUrl(p);
-                const proxy = p.srcProxy || (direto ? (workerBase(urlEpisodio) + '/?url=' + encodeURIComponent(direto)) : '');
-                const qual = getQual(p);
-                const nomeFinal = qual ? 'Light Speed ' + qual : (p.nome || 'Light Speed');
+                    // Prepara lista de players
+                    const lista = validos.map((p, i) => {
+                        const qual = getQual(p);
+                        const nome = qual ? 'Light Speed ' + qual : (p.nome || ('Player ' + (i+1)));
+                        const embed = montarEmbed(p, wBase);
+                        return Object.assign({}, p, { nome, embed, embedCode: embed, index: i+1 });
+                    });
 
-                let embed;
-                if (direto && /\.mp4|lightspeedst|\.m3u8/i.test(direto)) {
-                    embed = montarVideoElement(direto, proxy, qual);
-                } else if (p.embed || p.embedCode) {
-                    embed = p.embed || p.embedCode;
-                } else if (direto) {
-                    embed = `<video class="cronos-video" src="${escHtml(direto)}" controls autoplay playsinline preload="auto" referrerpolicy="no-referrer" style="width:100%;height:100%;background:#000;display:block;object-fit:contain"></video>`;
-                } else {
-                    return _buscarOriginal.apply(this, arguments);
-                }
+                    window.qcPlayerAtualResolvido = {
+                        players: lista, titulo, url: urlEp, img: imgCard, engine: engId
+                    };
 
-                // Guarda a lista para "Trocar Player"
-                window.qcPlayerAtualResolvido = {
-                    players: players.map((pp, idx) => {
-                        const d = getDiretoUrl(pp);
-                        const pr = pp.srcProxy || (d ? workerBase(urlEpisodio) + '/?url=' + encodeURIComponent(d) : '');
-                        const q = getQual(pp);
-                        const emb = (d && /\.mp4|lightspeedst|\.m3u8/i.test(d))
-                            ? montarVideoElement(d, pr, q)
-                            : (pp.embed || pp.embedCode || '');
-                        return Object.assign({}, pp, { embed: emb, embedCode: emb, index: idx + 1, nome: q ? 'Light Speed ' + q : (pp.nome || 'Player ' + (idx+1)) });
-                    }),
-                    titulo: tituloEpisodio,
-                    url: urlEpisodio,
-                    img: imgCard,
-                    engine: typeof engIdOuEpInfo === 'string' ? engIdOuEpInfo : (engIdOuEpInfo && engIdOuEpInfo.engine) || ''
-                };
+                    const preferido = window.qcPlayerFornecedorEscolhido
+                        ? lista.find(p => {
+                            const q = getQual(p);
+                            const slug = q ? 'lightspeed-' + q.toLowerCase() : '';
+                            return slug && (p.provedorId || '').includes(slug.replace('lightspeed-',''));
+                          })
+                        : null;
 
-                if (typeof AbrirTelaPlayer === 'function') {
-                    AbrirTelaPlayer(tituloEpisodio, embed, urlEpisodio, imgCard,
-                        typeof engIdOuEpInfo === 'string' ? engIdOuEpInfo : (engIdOuEpInfo && engIdOuEpInfo.engine) || '',
-                        nomeFinal);
-                }
-            })
-            .catch(err => {
-                console.warn('[CRONOS FILE FIX] fetch falhou, usando fallback original:', err);
-                if (st) st.style.display = 'none';
-                _buscarOriginal.apply(window, arguments);
-            });
+                    const escolhido = preferido || lista[0];
+
+                    if (typeof AbrirTelaPlayer === 'function') {
+                        AbrirTelaPlayer(titulo, escolhido.embed, urlEp, imgCard, engId, escolhido.nome);
+                    }
+                })
+                .catch(err => {
+                    console.warn('[CRONOS GH FIX] fetch falhou:', err.message, '— usando original');
+                    if (st) st.style.display = 'none';
+                    _orig.apply(window, arguments);
+                });
         };
 
-        window.buscarEAssistirEpisodio.__cronosFileLocalFix = true;
-        console.log('[CRONOS] Patch file:// instalado. Modo:', isLocal ? 'LOCAL' : 'HOSTED');
+        window.buscarEAssistirEpisodio.__cronosGHFix = true;
+        console.log('[CRONOS] Fix GitHub/file:// instalado. Worker:', AF_WORKER);
+    }
+
+    // Instala após todos os patches anteriores carregarem
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(instalar, 500));
+    } else {
+        setTimeout(instalar, 500);
     }
 })();
 </script>
