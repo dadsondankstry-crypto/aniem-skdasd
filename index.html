@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ANIME</title>
+    <meta name="app-version" content="ksm2-mobile-rotas-20260529">
 
     <!-- PWA / App instalável -->
     <meta name="theme-color" content="#000000">
@@ -13,10 +14,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="ANIME">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
-    <link rel="icon" type="image/png" sizes="512x512" href="./icons/icon-512.png">
-    <link rel="apple-touch-icon" href="./icons/icon-180.png">
+    <link rel="manifest" href="./manifest.webmanifest?v=ksm2-mobile-rotas-20260529">
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png?v=ksm2-mobile-rotas-20260529">
+    <link rel="icon" type="image/png" sizes="512x512" href="./icons/icon-512.png?v=ksm2-mobile-rotas-20260529">
+    <link rel="apple-touch-icon" href="./icons/icon-180.png?v=ksm2-mobile-rotas-20260529">
     <style>
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1517,6 +1518,42 @@ const PROXY = 'https://winter-cherry-3baa.getapi-oi.workers.dev/?url=';
 const PROXY_ANIMEFIRE = 'https://wild-mud-d4bf.getapi-oi.workers.dev/?url=';
 const SELETORES_AGRESSIVOS = '.w_item_b, .item, .card, article.anime, .anime-box, article, .result-item, ul.items li, .box-item, .post-item, .boxAN, .boxEP, .containerAnimes, .cardUltimosEps, .divCardUltimosEpsHome';
 
+
+// ========================================================
+// PATCH MOBILE ROTAS — evita travar em "Conectando Rotas"
+// ========================================================
+const CRONOS_MOBILE_ROTAS_VERSAO = 'ksm2-mobile-rotas-20260529';
+const CRONOS_TIMEOUT_ROTA_MS = 8500;
+const CRONOS_MAX_PAGINAS_HOME = 2;
+
+function cronosAbortSignalTimeout(ms) {
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        return AbortSignal.timeout(ms);
+    }
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), ms);
+    return controller.signal;
+}
+
+function cronosFetchComTimeout(url, options = {}, timeoutMs = CRONOS_TIMEOUT_ROTA_MS) {
+    const opts = Object.assign({}, options);
+    opts.cache = opts.cache || 'no-store';
+    opts.signal = opts.signal || cronosAbortSignalTimeout(timeoutMs);
+    return fetch(url, opts);
+}
+
+function cronosProxyParaEngine(engId) {
+    if (engId === 'af' && typeof PROXY_ANIMEFIRE === 'string' && PROXY_ANIMEFIRE) return PROXY_ANIMEFIRE;
+    return PROXY;
+}
+
+function cronosAtualizarStatusInicio(msg) {
+    const st = document.getElementById('statusInicio');
+    if (!st) return;
+    st.innerText = msg || '';
+    st.style.display = msg ? 'block' : 'none';
+}
+
 const ENGINES = {
     aq: { url: 'https://animeq.net', nome: 'ANQ' },
     ao: { url: 'https://animesonlinecc.to', nome: 'AOC' },
@@ -1756,14 +1793,38 @@ function processarImagemGeral(item, imgElement, basUrl, engId) {
 // ========================================================
 const EngineHub = {
     async iniciarCrawlerHome() {
-        document.getElementById('statusInicio').innerText = `Conectando Rotas Quad-Core...`;
-        document.getElementById('statusInicio').style.display = 'block';
+        cronosAtualizarStatusInicio('Conectando Rotas Quad-Core...');
 
-        document.getElementById('gridAnimesHome').innerHTML = '';
-        document.getElementById('gridEpisodiosHome').innerHTML = '';
-        document.getElementById('gridFilmesHome').innerHTML = '';
+        const gridAnimes = document.getElementById('gridAnimesHome');
+        const gridEpisodios = document.getElementById('gridEpisodiosHome');
+        const gridFilmes = document.getElementById('gridFilmesHome');
+        if (gridAnimes) gridAnimes.innerHTML = '';
+        if (gridEpisodios) gridEpisodios.innerHTML = '';
+        if (gridFilmes) gridFilmes.innerHTML = '';
 
         let checkCache = new Set();
+        let rotasFinalizadas = 0;
+        let rotasFalhas = 0;
+        let itensCarregados = 0;
+
+        const totalRotas = [
+            configFontes.aq && ['aq', '/episodio/', 'gridEpisodiosHome', 12],
+            configFontes.ao && ['ao', '/episodio/', 'gridEpisodiosHome', 12],
+            configFontes.gy && ['gy', '/lancamentos/', 'gridEpisodiosHome', 12],
+            configFontes.af && ['af', '/home/', 'gridEpisodiosHome', 12],
+            configFontes.aq && ['aq', '/anime/', 'gridAnimesHome', 12],
+            configFontes.ao && ['ao', '/anime/', 'gridAnimesHome', 12],
+            configFontes.gy && ['gy', '/lista-de-animes/', 'gridAnimesHome', 12],
+            configFontes.af && ['af', '/animes-atualizados/', 'gridAnimesHome', 12],
+            configFontes.aq && ['aq', '/filme/', 'gridFilmesHome', 12],
+            configFontes.af && ['af', '/lista-de-filmes-dublados/', 'gridFilmesHome', 12]
+        ].filter(Boolean);
+
+        const atualizarProgresso = () => {
+            const total = totalRotas.length || 1;
+            cronosAtualizarStatusInicio(`Conectando Rotas Quad-Core... ${rotasFinalizadas}/${total}`);
+        };
+        atualizarProgresso();
 
         const extrairParaGrid = (item, gridId, engId) => {
             const link = item.tagName === 'A' ? item : item.querySelector('a');
@@ -1787,12 +1848,17 @@ const EngineHub = {
 
             let tituloOriginal = title.innerText.trim() || img.getAttribute('alt') || 'Sem Titulo';
             this.montarCardUI({ url, titulo: tituloOriginal, img: imgSrc, isD: false, isL: false, itemNode: item }, gridId, engId);
+            itensCarregados++;
             return true;
         };
 
         const fetchSegment = async (engId, endpoint, gridId, limiteExato) => {
-            let count = 0; let pg = 1;
-            while(count < limiteExato && pg <= 5) {
+            let count = 0;
+            let pg = 1;
+            let falhouTudo = true;
+            const maxPaginas = CRONOS_MAX_PAGINAS_HOME;
+
+            while(count < limiteExato && pg <= maxPaginas) {
                 try {
                     let urlTarget = '';
                     if (engId === 'af') {
@@ -1801,7 +1867,12 @@ const EngineHub = {
                         urlTarget = pg > 1 ? `${ENGINES[engId].url}${endpoint}page/${pg}/` : `${ENGINES[engId].url}${endpoint}`;
                     }
 
-                    let html = await fetch(PROXY + encodeURIComponent(urlTarget)).then(r=>r.text());
+                    const proxyUsado = cronosProxyParaEngine(engId);
+                    let html = await cronosFetchComTimeout(proxyUsado + encodeURIComponent(urlTarget), {}, CRONOS_TIMEOUT_ROTA_MS).then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    });
+                    falhouTudo = false;
                     let doc = new DOMParser().parseFromString(html, 'text/html');
                     
                     let selector = SELETORES_AGRESSIVOS;
@@ -1813,23 +1884,25 @@ const EngineHub = {
                         if(extrairParaGrid(item, gridId, engId)) count++;
                         if(count >= limiteExato) break;
                     }
-                } catch(e) {}
+                } catch(e) {
+                    // No celular algumas rotas/proxies podem demorar demais.
+                    // O timeout corta a rota e deixa a Home seguir carregando as outras fontes.
+                    break;
+                }
                 pg++;
             }
+
+            if (falhouTudo) rotasFalhas++;
+            rotasFinalizadas++;
+            atualizarProgresso();
+            return count;
         };
 
-        if(configFontes.aq) await fetchSegment('aq', '/episodio/', 'gridEpisodiosHome', 12);
-        if(configFontes.ao) await fetchSegment('ao', '/episodio/', 'gridEpisodiosHome', 12);
-        if(configFontes.gy) await fetchSegment('gy', '/lancamentos/', 'gridEpisodiosHome', 12);
-        if(configFontes.af) await fetchSegment('af', '/home/', 'gridEpisodiosHome', 12);
-
-        if(configFontes.aq) await fetchSegment('aq', '/anime/', 'gridAnimesHome', 12);
-        if(configFontes.ao) await fetchSegment('ao', '/anime/', 'gridAnimesHome', 12);
-        if(configFontes.gy) await fetchSegment('gy', '/lista-de-animes/', 'gridAnimesHome', 12);
-        if(configFontes.af) await fetchSegment('af', '/animes-atualizados/', 'gridAnimesHome', 12);
-
-        if(configFontes.aq) await fetchSegment('aq', '/filme/', 'gridFilmesHome', 12);
-        if(configFontes.af) await fetchSegment('af', '/lista-de-filmes-dublados/', 'gridFilmesHome', 12);
+        try {
+            await Promise.allSettled(totalRotas.map(args => fetchSegment(...args)));
+        } catch(e) {
+            rotasFalhas++;
+        }
         
         if(configFontes.aq || configFontes.af) {
             document.getElementById('blocoFilmes').style.display = 'block';
@@ -1837,7 +1910,16 @@ const EngineHub = {
             document.getElementById('blocoFilmes').style.display = 'none';
         }
 
-        document.getElementById('statusInicio').style.display = 'none';
+        const temConteudo = itensCarregados > 0 ||
+            (gridEpisodios && gridEpisodios.children.length) ||
+            (gridAnimes && gridAnimes.children.length) ||
+            (gridFilmes && gridFilmes.children.length);
+
+        if (temConteudo) {
+            cronosAtualizarStatusInicio('');
+        } else {
+            cronosAtualizarStatusInicio('Nenhuma rota respondeu no celular. Atualize a página ou tente limpar o cache do aplicativo.');
+        }
     },
 
     realizarBusca() {
@@ -4812,7 +4894,30 @@ if (typeof EngineHub !== 'undefined' && EngineHub.montarCardUI && !EngineHub.__s
 
     if ('serviceWorker' in navigator && ambienteSeguro) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+            navigator.serviceWorker.register('./sw.js?v=ksm2-mobile-rotas-20260529', { scope: './' })
+                .then((registration) => {
+                    try { registration.update(); } catch(e) {}
+                    if (registration.waiting) {
+                        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    }
+                    registration.addEventListener('updatefound', () => {
+                        const novoSW = registration.installing;
+                        if (!novoSW) return;
+                        novoSW.addEventListener('statechange', () => {
+                            if (novoSW.state === 'installed' && navigator.serviceWorker.controller) {
+                                novoSW.postMessage({ type: 'SKIP_WAITING' });
+                            }
+                        });
+                    });
+                })
+                .catch(() => {});
+        });
+
+        let cronosRecarregouNovoSW = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (cronosRecarregouNovoSW) return;
+            cronosRecarregouNovoSW = true;
+            window.location.reload();
         });
     }
 
