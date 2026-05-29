@@ -1,21 +1,20 @@
-const CACHE_NAME = 'ksm2-anime-pwa-mobile-rotas-20260529';
+const CACHE_NAME = 'ksm2-cinema-pwa-v1-mobile-ready';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './icons/icon-180.png',
   './icons/icon-192.png',
-  './icons/icon-256.png',
-  './icons/icon-384.png',
   './icons/icon-512.png',
   './icons/icon-maskable-192.png',
-  './icons/icon-maskable-512.png'
+  './icons/icon-maskable-512.png',
+  './icons/favicon.ico'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL).catch(() => Promise.resolve()))
+      .then((cache) => cache.addAll(APP_SHELL))
       .then(() => self.skipWaiting())
   );
 });
@@ -28,27 +27,6 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
-
-function fetchComTimeout(request, timeoutMs = 9000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
-    fetch(request, { cache: 'no-store' })
-      .then((response) => {
-        clearTimeout(timer);
-        resolve(response);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
-}
-
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
@@ -56,35 +34,34 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   const sameOrigin = url.origin === self.location.origin;
 
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
+          return response;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Não intercepta players, vídeos, proxies ou qualquer rota externa.
   if (!sameOrigin) {
     event.respondWith(fetch(request));
     return;
   }
 
-  if (request.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname === self.location.pathname.replace(/\/sw\.js.*$/, '/')) {
-    event.respondWith(
-      fetchComTimeout(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy)).catch(() => {});
-          return response;
-        })
-        .catch(() => caches.match('./index.html').then((cached) => cached || caches.match('./')))
-    );
-    return;
-  }
-
   event.respondWith(
     caches.match(request).then((cached) => {
-      const rede = fetch(request).then((response) => {
-        if (response && response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
-        }
+      if (cached) return cached;
+      return fetch(request).then((response) => {
+        if (!response || response.status !== 200 || response.type !== 'basic') return response;
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         return response;
-      }).catch(() => cached);
-
-      return cached || rede;
+      });
     })
   );
 });
